@@ -1,23 +1,22 @@
 export interface AuditInputs {
   transactionProfile: string;
   regulatoryContext: string;
-  imageFile: File | null;
-  imageBase64: string | null;
+  documentImage: File | null;
 }
 
-export interface AuditResult {
+export enum RiskLevel {
+  HIGH = 'HIGH ALERT',
+  MEDIUM = 'MEDIUM REVIEW',
+  LOW = 'LOW CONCERN',
+  UNKNOWN = 'UNKNOWN'
+}
+
+export interface AuditResponse {
   rawMarkdown: string;
-  sections: {
-    riskSeverity: string;
-    verificationSummary: string;
-    complianceVerdict: string;
-    ethicalBiasFlag: string;
-  };
+  timestamp: string;
 }
 
-export enum LoadingState {
-  IDLE = 'IDLE',
-  ANALYZING = 'ANALYZING',
-  SUCCESS = 'SUCCESS',
-  ERROR = 'ERROR',
+export interface LoadingState {
+  isLoading: boolean;
+  step: string; // e.g., "Analyzing Image", "Checking Regulations", "Detecting Bias"
 }
