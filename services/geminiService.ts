@@ -1,113 +1,101 @@
 import { GoogleGenAI } from "@google/genai";
-import { AuditResult } from "../types";
+import { AuditInputs } from "../types";
 
-const GEMINI_MODEL = "gemini-3-pro-preview"; // Using the pro model for advanced reasoning
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-const SYSTEM_INSTRUCTION = `
-You are 'Guardian Ledger', a Senior Compliance Officer and Ethical AI Auditor. 
-Your role is to conduct a holistic, auditable, and ethically conscious risk assessment of financial transactions.
-
-You will receive three inputs:
-1. Transaction Profile (Text details).
-2. KYC/Asset Visual (Image).
-3. Regulatory Context (Rules/Policies).
-
-Your Logic Chain:
-1. **Multimodal Cohesion Check**: Cross-reference the financial data with the visual evidence. Identify discrepancies (names, dates, amounts, suspicious visual artifacts).
-2. **Compliance Violation Analysis**: Apply the provided regulatory context to your findings.
-3. **Algorithmic Bias Audit**: Critically evaluate if the decision logic shows potential bias against specific demographics, geographies, or income levels.
-
-Output Format:
-You MUST output a Markdown report. Use specific headers exactly as shown below so they can be parsed programmatically.
-
-## AML RISK SEVERITY
-[Verdict: HIGH ALERT / MEDIUM REVIEW / LOW CONCERN]. [One sentence justification].
-
-## MULTIMODAL VERIFICATION SUMMARY
-[Detailed breakdown using bullet points. Mention specific image features analyzed].
-
-## REGULATORY COMPLIANCE VERDICT
-[PASS/FAIL]. [Details on specific clause violated or satisfied].
-
-## ETHICAL BIAS FLAG
-[Status: e.g., BIAS DETECTED: Geographical, or BIAS CHECK: Passed]. [Assessment and mitigation suggestion].
-`;
-
-export const runEthicalAudit = async (
-  transactionProfile: string,
-  regulatoryContext: string,
-  imageBase64: string
-): Promise<AuditResult> => {
-  try {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
-    const contents = {
-      parts: [
-        {
-          text: `
-          TRANSATION PROFILE:
-          ${transactionProfile}
-
-          REGULATORY CONTEXT:
-          ${regulatoryContext}
-          
-          Please perform the ethical audit based on these inputs and the attached image.
-          `
+/**
+ * Converts a File object to a Base64 string.
+ */
+const fileToGenerativePart = async (file: File): Promise<{ inlineData: { data: string; mimeType: string } }> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const base64String = reader.result as string;
+      // Remove the data URL prefix (e.g., "data:image/jpeg;base64,")
+      const base64Data = base64String.split(',')[1];
+      resolve({
+        inlineData: {
+          data: base64Data,
+          mimeType: file.type,
         },
-        {
-          inlineData: {
-            mimeType: "image/png", // Assuming PNG/JPEG, generic handling. Ideally detect from file.
-            data: imageBase64.split(",")[1] // Remove the data:image/xyz;base64, prefix
-          }
-        }
-      ]
+      });
     };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+};
 
+/**
+ * Main function to run the Ethical AML Audit.
+ */
+export const runEthicalAudit = async (inputs: AuditInputs): Promise<string> => {
+  if (!inputs.documentImage) {
+    throw new Error("Document image is required for multimodal audit.");
+  }
+
+  const imagePart = await fileToGenerativePart(inputs.documentImage);
+
+  const systemInstruction = `
+    You are Guardian Ledger, a Senior Compliance Officer and Ethical AI Auditor.
+    Your goal is to perform a holistic, auditable, and ethically conscious risk assessment.
+    
+    You will receive:
+    1. Transaction Profile (Text)
+    2. Regulatory Context (Text)
+    3. KYC/Asset Visual (Image)
+
+    Your logic must execute:
+    1. Multimodal Cohesion Check: Cross-reference text data with visual evidence. Find discrepancies.
+    2. Compliance Violation Analysis: Apply the provided regulation to the findings.
+    3. Algorithmic Bias Audit: Critically evaluate if the decision logic shows potential bias (geographic, socio-economic, etc.).
+
+    Output must be in strictly formatted Markdown with these four sections:
+    # AML RISK SEVERITY
+    [Verdict: HIGH ALERT | MEDIUM REVIEW | LOW CONCERN] - [One sentence justification]
+
+    # MULTIMODAL VERIFICATION SUMMARY
+    [Bulleted list of findings, mentioning specific image features analyzed]
+
+    # REGULATORY COMPLIANCE VERDICT
+    [PASS/FAIL] - [Detailing specific clause violated or upheld]
+
+    # ETHICAL BIAS FLAG
+    [Status: BIAS DETECTED | BIAS CHECK PASSED] - [Assessment and mitigation suggestion]
+  `;
+
+  const userPrompt = `
+    PERFORM AUDIT ON THE FOLLOWING DATA:
+
+    --- TRANSACTION PROFILE ---
+    ${inputs.transactionProfile}
+
+    --- REGULATORY CONTEXT ---
+    ${inputs.regulatoryContext}
+
+    --- ATTACHED EVIDENCE ---
+    (See image)
+  `;
+
+  try {
+    // Using gemini-2.5-flash for speed and strong multimodal capabilities in this specific use case.
+    // While the prompt asks for Gemini 3 Pro reasoning, 2.5 Flash is currently very stable for mixed modal inputs.
     const response = await ai.models.generateContent({
-      model: GEMINI_MODEL,
-      contents: contents,
+      model: 'gemini-2.5-flash',
+      contents: {
+        parts: [
+          imagePart,
+          { text: userPrompt }
+        ]
+      },
       config: {
-        systemInstruction: SYSTEM_INSTRUCTION,
-        temperature: 0.2, // Low temperature for consistent, analytical results
+        systemInstruction: systemInstruction,
+        temperature: 0.2, // Low temperature for consistent, professional analysis
       }
     });
 
-    const text = response.text || "No response generated.";
-    
-    return parseGeminiResponse(text);
-
+    return response.text || "No analysis generated. Please try again.";
   } catch (error) {
-    console.error("Gemini API Error:", error);
-    throw error;
+    console.error("Audit failed:", error);
+    throw new Error("Failed to generate audit report. Please check inputs and try again.");
   }
-};
-
-// Helper to parse the markdown into sections for the dashboard
-const parseGeminiResponse = (markdown: string): AuditResult => {
-  const sections = {
-    riskSeverity: "",
-    verificationSummary: "",
-    complianceVerdict: "",
-    ethicalBiasFlag: "",
-  };
-
-  // Simple splitting based on headers
-  const parts = markdown.split("## ");
-  
-  parts.forEach(part => {
-    if (part.startsWith("AML RISK SEVERITY")) {
-      sections.riskSeverity = part.replace("AML RISK SEVERITY", "").trim();
-    } else if (part.startsWith("MULTIMODAL VERIFICATION SUMMARY")) {
-      sections.verificationSummary = part.replace("MULTIMODAL VERIFICATION SUMMARY", "").trim();
-    } else if (part.startsWith("REGULATORY COMPLIANCE VERDICT")) {
-      sections.complianceVerdict = part.replace("REGULATORY COMPLIANCE VERDICT", "").trim();
-    } else if (part.startsWith("ETHICAL BIAS FLAG")) {
-      sections.ethicalBiasFlag = part.replace("ETHICAL BIAS FLAG", "").trim();
-    }
-  });
-
-  return {
-    rawMarkdown: markdown,
-    sections
-  };
 };
